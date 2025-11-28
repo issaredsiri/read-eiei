@@ -3,11 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI PDF Flipbook (Full Version)</title>
+    <title>AI PDF Flipbook (Final Stable Version with OCR)</title>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://unpkg.com/page-flip/dist/js/page-flip.browser.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <script src='https://unpkg.com/tesseract.js@5.0.3/dist/tesseract.min.js'></script> 
 
     <style>
         /* CSS Reset & Layout */
@@ -21,7 +23,7 @@
             justify-content: center;
             min-height: 100vh;
             margin: 0;
-            overflow: hidden; /* ป้องกัน Scrollbar ของ Body */
+            overflow: hidden; 
         }
 
         /* Control Panel */
@@ -75,11 +77,10 @@
         /* Book Container */
         .book-wrapper {
             width: 100%;
-            height: 85vh;
+            height: 75vh; 
             display: flex;
             justify-content: center;
             align-items: center;
-            /* แก้บัคกระตุก: ซ่อน overflow และจัด layout ให้แน่น */
             overflow: hidden;
             position: relative;
         }
@@ -88,14 +89,12 @@
         canvas {
             display: block; 
             margin: 0 auto;
-            /* ช่วยให้ภาพคมชัดขึ้นเมื่อถูก resize */
             image-rendering: -webkit-optimize-contrast;
             image-rendering: crisp-edges;
         }
 
         /* ปรับแต่ง Shadow ของ Library */
         .stf__block {
-            /* ลดเงาลงเพื่อให้ลื่นขึ้น */
             filter: drop-shadow(0 0 10px rgba(0,0,0,0.3));
         }
 
@@ -161,17 +160,32 @@
 
         // Variables
         let pageFlip;
-        let pageTexts = []; // เก็บข้อความแต่ละหน้า
+        let pageTexts = [];
         let synth = window.speechSynthesis;
         let voices = [];
 
-        // --- 1. ระบบเสียง (TTS) ---
+        // *** 2. ฟังก์ชัน OCR (Tesseract.js) ***
+        async function runOCR(imageCanvas, langCode = 'tha+eng') {
+            try {
+                // Tesseract.js จะรับ Canvas มาประมวลผลโดยตรง
+                const worker = await Tesseract.createWorker(langCode);
+                const { data: { text } } = await worker.recognize(imageCanvas);
+                await worker.terminate();
+                
+                return text.replace(/\s+/g, ' ').trim();
+
+            } catch (error) {
+                console.error("Tesseract OCR Error:", error);
+                return "";
+            }
+        }
+        
+        // --- ระบบเสียง (TTS) ---
 
         function loadVoices() {
             voices = synth.getVoices();
             voiceSelect.innerHTML = '';
             
-            // เรียงลำดับ: เอาเสียง Google/Microsoft (AI) ขึ้นก่อน
             voices.sort((a, b) => {
                 const isThaiA = a.lang.includes('th');
                 const isThaiB = b.lang.includes('th');
@@ -196,17 +210,19 @@
 
         function speak(text) {
             if (synth.speaking) synth.cancel();
-            if (!text || text.trim() === "") {
-                ttsStatus.textContent = "(ไม่มีข้อความ)";
-                setTimeout(() => ttsStatus.textContent = "", 2000);
+            
+            let cleanText = text.replace(/\s+/g, ' ').trim();
+            
+            if (!cleanText) {
+                ttsStatus.textContent = "(ไม่พบข้อความในหน้านี้)";
+                setTimeout(() => ttsStatus.textContent = "", 3000);
                 return;
             }
 
-            const utterance = new SpeechSynthesisUtterance(text);
+            const utterance = new SpeechSynthesisUtterance(cleanText);
             const selectedVoice = voices.find(v => v.name === voiceSelect.value);
             if (selectedVoice) utterance.voice = selectedVoice;
             
-            // ปรับความเร็วเสียงให้เป็นธรรมชาติ
             utterance.rate = 1.0; 
             utterance.pitch = 1.0;
 
@@ -220,7 +236,9 @@
                 btnStop.style.display = 'none';
                 ttsStatus.textContent = "";
             };
-            utterance.onerror = () => {
+            utterance.onerror = (event) => {
+                console.error("TTS Error:", event);
+                ttsStatus.textContent = "เกิดข้อผิดพลาดในการอ่านเสียง";
                 btnRead.style.display = 'flex';
                 btnStop.style.display = 'none';
             };
@@ -229,17 +247,14 @@
         }
 
         btnRead.addEventListener('click', () => {
-            if (!pageFlip) return;
+            if (!pageFlip || btnRead.disabled) return;
             
-            // Logic อ่านข้อความ: อ่านหน้าซ้าย + ขวา ถ้าเปิดแบบหน้าคู่
             const index = pageFlip.getCurrentPageIndex();
-            const orient = pageFlip.getOrientation(); // portrait / landscape
+            const orient = pageFlip.getOrientation(); 
             
             let textToRead = pageTexts[index] || "";
 
-            // ถ้าเป็นแนวนอน (Landscape) และมีหน้าถัดไป ให้เอาข้อความมาต่อกัน
             if (orient === 'landscape' && (index + 1) < pageTexts.length) {
-                // เช็คว่าไม่ใช่หน้าสุดท้าย หรือหน้าปกเดี่ยวๆ
                 textToRead += " " + (pageTexts[index + 1] || "");
             }
 
@@ -253,7 +268,7 @@
             ttsStatus.textContent = "";
         });
 
-        // --- 2. ระบบ PDF & Render ---
+        // --- ระบบ PDF & Render ---
 
         uploadInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
@@ -272,8 +287,8 @@
                     await renderPDF(typedarray);
                     btnRead.disabled = false;
                 } catch (err) {
-                    console.error(err);
-                    alert("เกิดข้อผิดพลาดในการอ่านไฟล์");
+                    console.error("PDF Loading Error in getDocument or renderPDF:", err);
+                    alert("เกิดข้อผิดพลาดในการโหลดหรืออ่านไฟล์ PDF (กรุณาลองไฟล์อื่น)");
                 } finally {
                     loadingScreen.style.display = 'none';
                 }
@@ -290,112 +305,148 @@
 
             const pdf = await pdfjsLib.getDocument(data).promise;
             const shouldSplit = splitCheckbox.checked;
-            const scale = 1.5; // Scale คุณภาพ
+            
+            const RENDER_SCALE = 1.0; 
 
-            // ตัวแปรพักข้อมูล
-            let backCoverCanvas = null;
+            // ตัวแปรสำหรับเก็บข้อมูลปกหลัง (Fixed: TypeError)
+            let backCoverData = null; 
             let backCoverText = "";
 
             // คำนวณขนาดจากหน้าแรก
             const firstPage = await pdf.getPage(1);
-            const vp = firstPage.getViewport({ scale: scale });
-            const finalW = shouldSplit ? vp.width / 2 : vp.width;
-            const finalH = vp.height;
+            const vp = firstPage.getViewport({ scale: RENDER_SCALE });
+            
+            const fullW = vp.width;
+            const fullH = vp.height;
+
+            const singleW = shouldSplit ? fullW / 2 : fullW;
+            const singleH = fullH;
+
+            const MAX_DIMENSION = 800; 
+            let adjustedRatio = 1.0;
+            if (singleW > MAX_DIMENSION) {
+                adjustedRatio = MAX_DIMENSION / singleW;
+            }
+            
+            const adjustedW = singleW * adjustedRatio;
+            const adjustedH = singleH * adjustedRatio;
+            const midX = fullW / 2;
+
 
             // Loop ทุกหน้า
             for (let i = 1; i <= pdf.numPages; i++) {
                 loadingText.textContent = `กำลังแปลงหน้า ${i} / ${pdf.numPages}...`;
                 
                 const page = await pdf.getPage(i);
-                const viewport = page.getViewport({ scale: scale });
+                const viewport = page.getViewport({ scale: RENDER_SCALE });
+
+                // 1. สร้าง Canvas ชั่วคราว (Hidden) เพื่อ Render หน้าเต็ม PDF 
+                const tempCanvas = createPageCanvas(fullW, fullH);
+                await page.render({ canvasContext: tempCanvas.getContext('2d'), viewport }).promise;
                 
-                // ดึง Text
+                // 2. ดึง Text
                 const textContent = await page.getTextContent();
                 let textL = "", textR = "";
-                const midX = viewport.width / 2;
-
-                // แยก Text ซ้าย/ขวา ตามพิกัด X
-                textContent.items.forEach(item => {
-                    const x = item.transform[4]; 
-                    const str = item.str + " ";
-                    if (shouldSplit) {
-                        (x < midX) ? textL += str : textR += str;
-                    } else {
-                        textL += str;
-                    }
-                });
 
                 if (shouldSplit) {
-                    // === โหมดตัดหน้าคู่ ===
-                    if (i === 1) {
-                        // หน้า 1 (ปก): 
-                        // ซ้าย (ปกหลัง) -> เก็บไว้แปะท้ายสุด
-                        backCoverCanvas = document.createElement('canvas');
-                        backCoverCanvas.width = finalW; backCoverCanvas.height = finalH;
-                        await page.render({ canvasContext: backCoverCanvas.getContext('2d'), viewport }).promise;
-                        backCoverText = textL;
+                    textContent.items.forEach(item => {
+                        const x = item.transform[4]; 
+                        const str = item.str + " ";
+                        (x < midX) ? textL += str : textR += str;
+                    });
+                } else {
+                    textL = textContent.items.map(item => item.str).join(' ');
+                }
 
-                        // ขวา (ปกหน้า) -> แปะเลยเป็นหน้าแรก
-                        const cFront = createPageCanvas(finalW, finalH);
+                
+                // *** 3. OCR FALLBACK LOGIC ***
+                // ถ้าไม่พบข้อความเลย (ไฟล์สแกน) ให้รัน OCR
+                if (textL.trim() === "" && textR.trim() === "") {
+                    loadingText.textContent = `กำลังแปลงหน้า ${i} (OCR Fallback)...`;
+                    
+                    const fullText = await runOCR(tempCanvas);
+                    
+                    if (shouldSplit) {
+                        // โหมดตัดหน้า: OCR มักแยกซ้ายขวาไม่ได้แม่นยำ 
+                        // เราจึงรวมข้อความ OCR ไว้ใน textL และให้ TTS อ่านรวมกัน
+                        textL = fullText;
+                        textR = "";
+                    } else {
+                        // โหมดปกติ
+                        textL = fullText;
+                    }
+                }
+                
+                // 4. สร้าง Canvas สุดท้ายสำหรับแสดงผล (Adjusted Size)
+                
+                if (shouldSplit) {
+                    // === โหมดตัดหน้าคู่ ===
+                    
+                    if (i === 1) {
+                        // ปกหลัง (ซ้าย) -> เก็บ Canvas ชั่วคราว และ Text ไว้
+                        let tempCanvasData = tempCanvas; 
+                        backCoverText = textL; // TextL (ปกหลัง) ถูกดึง/OCR มาแล้ว
+
+                        // ปกหน้า (ขวา) -> สร้าง Final Canvas และตัดเอาส่วนขวามา
+                        const cFront = createPageCanvas(adjustedW, adjustedH);
                         const ctx = cFront.getContext('2d');
-                        ctx.translate(-finalW, 0); // เลื่อน Viewport เพื่อเอาด้านขวา
-                        await page.render({ canvasContext: ctx, viewport }).promise;
+                        
+                        // ตัดส่วนขวา: เริ่มตัดจาก x กลางหน้า (midX)
+                        ctx.drawImage(tempCanvasData, midX, 0, midX, fullH, 0, 0, adjustedW, adjustedH);
                         
                         bookElement.appendChild(cFront);
                         pageTexts.push(textR);
+                        
+                        // เก็บ Canvas เต็มใบไว้ใน backCoverData เพื่อใช้เป็นปกหลัง
+                        backCoverData = tempCanvasData; 
+                        tempCanvasData = null; 
 
                     } else {
-                        // หน้าเนื้อหา: สร้าง 2 canvas (ซ้าย, ขวา)
-                        // 1. ซ้าย
-                        const cL = createPageCanvas(finalW, finalH);
-                        await page.render({ canvasContext: cL.getContext('2d'), viewport }).promise;
+                        // หน้าเนื้อหา: ซ้าย -> ขวา
+                        
+                        // 1. ซ้าย: ตัดจาก (0, 0)
+                        const cL = createPageCanvas(adjustedW, adjustedH);
+                        cL.getContext('2d').drawImage(tempCanvas, 0, 0, midX, fullH, 0, 0, adjustedW, adjustedH);
                         bookElement.appendChild(cL);
                         pageTexts.push(textL);
 
-                        // 2. ขวา
-                        const cR = createPageCanvas(finalW, finalH);
-                        const ctxR = cR.getContext('2d');
-                        ctxR.translate(-finalW, 0);
-                        await page.render({ canvasContext: ctxR, viewport }).promise;
+                        // 2. ขวา: ตัดจาก (midX, 0)
+                        const cR = createPageCanvas(adjustedW, adjustedH);
+                        cR.getContext('2d').drawImage(tempCanvas, midX, 0, midX, fullH, 0, 0, adjustedW, adjustedH);
                         bookElement.appendChild(cR);
                         pageTexts.push(textR);
                     }
                 } else {
-                    // === โหมดปกติ ===
-                    const canvas = createPageCanvas(finalW, finalH);
-                    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+                    // === โหมดปกติ (ไม่ตัดหน้า) ===
+                    const canvas = createPageCanvas(adjustedW, adjustedH);
+                    canvas.getContext('2d').drawImage(tempCanvas, 0, 0, fullW, fullH, 0, 0, adjustedW, adjustedH);
                     bookElement.appendChild(canvas);
                     pageTexts.push(textL);
                 }
             }
 
-            // แปะปกหลัง (ถ้ามีและอยู่ในโหมดตัด)
-            if (shouldSplit && backCoverCanvas) {
-                // ต้องวาดใหม่ลง Canvas ที่ Clean (เพราะ backCoverCanvas ที่ create ไว้ context อาจจะ shift)
-                // แต่วิธีง่ายสุดคือใช้ backCoverCanvas ที่ render เสร็จแล้ว แต่เราต้อง Crop เอาเฉพาะซ้าย
-                // วิธีแก้: วาด backCoverCanvas (เต็มใบ) ลง canvas ใหม่ขนาดครึ่งเดียว
-                const finalBack = createPageCanvas(finalW, finalH);
-                finalBack.getContext('2d').drawImage(backCoverCanvas, 0, 0); // วาดเริ่มที่ 0,0 มันจะเห็นแค่ครึ่งซ้ายพอดี
+            // 5. แปะปกหลัง (ถ้ามี)
+            if (shouldSplit && backCoverData) { 
+                const finalBack = createPageCanvas(adjustedW, adjustedH);
+                const ctx = finalBack.getContext('2d');
+                
+                // ปกหลังคือส่วนซ้ายของหน้า 1
+                ctx.drawImage(backCoverData, 0, 0, midX, fullH, 0, 0, adjustedW, adjustedH);
                 
                 bookElement.appendChild(finalBack);
                 pageTexts.push(backCoverText);
             }
 
-            // *** FIX JITTER: แก้บัคกระตุกด้วยการเช็คเลขคู่ ***
-            // PageFlip ต้องการจำนวนหน้าเป็นเลขคู่ (Even) เพื่อให้ปกหลังปิดสนิท
+            // 6. FIX JITTER: แก้บัคกระตุกด้วยการเช็คเลขคู่
             if (bookElement.children.length % 2 !== 0) {
-                const blankPage = createPageCanvas(finalW, finalH);
-                const ctx = blankPage.getContext('2d');
-                ctx.fillStyle = "white"; 
-                ctx.fillRect(0,0, finalW, finalH);
-                
-                // แทรกหน้าว่างก่อนหน้าสุดท้าย (เพื่อให้ปกหลังยังเป็นหน้าสุดท้ายจริงๆ)
-                // หรือต่อท้ายสุดเลยก็ได้ ในที่นี้ต่อท้ายสุดเพื่อความชัวร์
+                const blankPage = createPageCanvas(adjustedW, adjustedH);
+                blankPage.getContext('2d').fillStyle = "white"; 
+                blankPage.getContext('2d').fillRect(0,0, adjustedW, adjustedH);
                 bookElement.appendChild(blankPage);
                 pageTexts.push(""); 
             }
 
-            initFlipBook(finalW, finalH);
+            initFlipBook(adjustedW, adjustedH);
         }
 
         // Helper สร้าง Canvas เปล่า
@@ -410,14 +461,17 @@
             pageFlip = new St.PageFlip(bookElement, {
                 width: w,
                 height: h,
-                size: 'stretch',
-                // Config ความลื่นไหล
-                minWidth: 300, maxWidth: 1000,
-                minHeight: 400, maxHeight: 1200,
+                size: 'fixed', 
+                
+                minWidth: 300, 
+                maxWidth: w,
+                minHeight: 400, 
+                maxHeight: h,
+                
                 showCover: true,
-                maxShadowOpacity: 0.2, // ลดเงาให้ไม่หนักเครื่อง
-                autoSize: true,
-                mobileScrollSupport: false // ป้องกันปัดแล้วจอเลื่อนบนมือถือ
+                maxShadowOpacity: 0.2, 
+                autoSize: true, 
+                mobileScrollSupport: false
             });
 
             pageFlip.loadFromHTML(document.querySelectorAll("canvas"));
