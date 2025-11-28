@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Spread to Flipbook</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://unpkg.com/page-flip/dist/js/page-flip.browser.js"></script>
+
+    <style>
+        body {
+            background-color: #333;
+            color: white;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden; /* ป้องกัน Scrollbar ซ้อน */
+        }
+
+        .controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #444;
+            border-radius: 8px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .book-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 85vh; 
+        }
+
+        canvas {
+            /* ไม่ต้องใส่เงาที่ canvas โดยตรง เพราะ Flipbook จะจัดการให้ */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <label for="upload">เลือกไฟล์ PDF (แบบหน้าคู่): </label>
+        <input type="file" id="upload" accept="application/pdf" />
+        
+        <div style="margin-left: 20px; font-size: 0.9em;">
+            <input type="checkbox" id="splitPages" checked>
+            <label for="splitPages">ตัดแบ่งครึ่งหน้า (สำหรับไฟล์หน้าคู่)</label>
+        </div>
+    </div>
+
+    <div id="book" class="book-container"></div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        const uploadInput = document.getElementById('upload');
+        const splitCheckbox = document.getElementById('splitPages');
+        const bookElement = document.getElementById('book');
+        let pageFlip;
+
+        uploadInput.addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (file.type !== 'application/pdf') {
+                alert('กรุณาอัพโหลดไฟล์ PDF เท่านั้น');
+                return;
+            }
+
+            const fileReader = new FileReader();
+            fileReader.onload = async function() {
+                const typedarray = new Uint8Array(this.result);
+                await renderPDF(typedarray);
+            };
+            fileReader.readAsArrayBuffer(file);
+        });
+
+        async function renderPDF(data) {
+            bookElement.innerHTML = '';
+            if (pageFlip) pageFlip.destroy();
+
+            const loadingTask = pdfjsLib.getDocument(data);
+            const pdf = await loadingTask.promise;
+            
+            const shouldSplit = splitCheckbox.checked;
+            const scale = 1.5; 
+
+            // ตัวแปรสำหรับเก็บ "ปกหลัง" เอาไว้แปะตอนท้ายสุด
+            let backCoverCanvas = null;
+
+            const firstPage = await pdf.getPage(1);
+            let viewport = firstPage.getViewport({ scale: scale });
+            let finalWidth = shouldSplit ? viewport.width / 2 : viewport.width;
+            let finalHeight = viewport.height;
+
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                const page = await pdf.getPage(pageNum);
+                viewport = page.getViewport({ scale: scale });
+
+                if (shouldSplit) {
+                    // === โหมดตัดครึ่งหน้า ===
+                    
+                    if (pageNum === 1) {
+                        // *** กรณีหน้าแรก (ปกคู่) ***
+                        // ซ้าย = ปกหลัง (เก็บไว้ก่อน)
+                        // ขวา = ปกหน้า (แสดงเลย เป็นหน้าแรก)
+
+                        // 1. จัดการปกหลัง (ซ้าย) - ยังไม่ append ลง HTML
+                        backCoverCanvas = document.createElement('canvas');
+                        const ctxBack = backCoverCanvas.getContext('2d');
+                        backCoverCanvas.width = viewport.width / 2;
+                        backCoverCanvas.height = viewport.height;
+                        
+                        await page.render({
+                            canvasContext: ctxBack,
+                            viewport: viewport
+                        }).promise;
+
+                        // 2. จัดการปกหน้า (ขวา) - append เลย
+                        const canvasFront = document.createElement('canvas');
+                        const ctxFront = canvasFront.getContext('2d');
+                        canvasFront.width = viewport.width / 2;
+                        canvasFront.height = viewport.height;
+                        
+                        // เลื่อนตำแหน่งเพื่อเอาภาพด้านขวา
+                        ctxFront.translate(-(viewport.width / 2), 0); 
+
+                        await page.render({
+                            canvasContext: ctxFront,
+                            viewport: viewport
+                        }).promise;
+                        
+                        // ใส่ปกหน้าเข้าเป็นหน้าแรก
+                        bookElement.appendChild(canvasFront);
+
+                    } else {
+                        // *** กรณีหน้าเนื้อหาทั่วไป (2, 3, 4...) ***
+                        // ตัดซ้าย ใส่ก่อน, ตัดขวา ใส่ตาม
+                        
+                        // หน้าซ้าย
+                        const canvasL = document.createElement('canvas');
+                        const ctxL = canvasL.getContext('2d');
+                        canvasL.width = viewport.width / 2;
+                        canvasL.height = viewport.height;
+                        await page.render({ canvasContext: ctxL, viewport: viewport }).promise;
+                        bookElement.appendChild(canvasL);
+
+                        // หน้าขวา
+                        const canvasR = document.createElement('canvas');
+                        const ctxR = canvasR.getContext('2d');
+                        canvasR.width = viewport.width / 2;
+                        canvasR.height = viewport.height;
+                        ctxR.translate(-(viewport.width / 2), 0);
+                        await page.render({ canvasContext: ctxR, viewport: viewport }).promise;
+                        bookElement.appendChild(canvasR);
+                    }
+
+                } else {
+                    // === โหมดปกติ (ไม่ตัด) ===
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    await page.render({ canvasContext: context, viewport: viewport }).promise;
+                    bookElement.appendChild(canvas);
+                }
+            }
+
+            // *** ขั้นตอนสุดท้าย ***
+            // ถ้ามีปกหลังที่เก็บไว้ (backCoverCanvas) ให้เอามาต่อท้ายสุด
+            if (shouldSplit && backCoverCanvas) {
+                bookElement.appendChild(backCoverCanvas);
+            }
+
+            initFlipBook(finalWidth, finalHeight);
+        }
+
+        function initFlipBook(w, h) {
+            pageFlip = new St.PageFlip(bookElement, {
+                width: w, 
+                height: h,
+                size: 'stretch',
+                // ปรับ min/max ให้ยืดหยุ่นขึ้น
+                minWidth: 200,
+                maxWidth: 800,
+                minHeight: 300,
+                maxHeight: 1000,
+                showCover: true,
+                maxShadowOpacity: 0.5,
+                autoSize: true
+            });
+
+            pageFlip.loadFromHTML(document.querySelectorAll("canvas"));
+        }
+    </script>
+</body>
+</html>
