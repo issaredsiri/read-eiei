@@ -3,204 +3,434 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF Spread to Flipbook</title>
+    <title>AI PDF Flipbook (Full Version)</title>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://unpkg.com/page-flip/dist/js/page-flip.browser.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <style>
+        /* CSS Reset & Layout */
         body {
-            background-color: #333;
-            color: white;
-            font-family: sans-serif;
+            background-color: #2b2b2b;
+            color: #f0f0f0;
+            font-family: 'Sarabun', sans-serif;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             min-height: 100vh;
             margin: 0;
-            overflow: hidden; /* ป้องกัน Scrollbar ซ้อน */
+            overflow: hidden; /* ป้องกัน Scrollbar ของ Body */
         }
 
+        /* Control Panel */
         .controls {
-            margin-bottom: 20px;
-            padding: 15px;
-            background: #444;
-            border-radius: 8px;
+            margin-bottom: 15px;
+            padding: 10px 20px;
+            background: #3e3e3e;
+            border-radius: 10px;
             display: flex;
-            gap: 10px;
+            gap: 15px;
             align-items: center;
-            z-index: 10;
+            flex-wrap: wrap;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            z-index: 100;
         }
 
-        .book-container {
+        /* Inputs & Buttons */
+        select, button, label {
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        select {
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #555;
+            background: #eee;
+            color: #333;
+            max-width: 250px;
+        }
+
+        button {
+            padding: 8px 15px;
+            border-radius: 5px;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.2s;
+        }
+
+        button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.1); }
+        button:disabled { background-color: #666; cursor: not-allowed; opacity: 0.7; }
+        
+        .btn-stop { background-color: #dc3545; }
+        .divider { width: 1px; height: 25px; background: #666; margin: 0 5px; }
+
+        /* Book Container */
+        .book-wrapper {
+            width: 100%;
+            height: 85vh;
             display: flex;
             justify-content: center;
             align-items: center;
-            width: 100%;
-            height: 85vh; 
+            /* แก้บัคกระตุก: ซ่อน overflow และจัด layout ให้แน่น */
+            overflow: hidden;
+            position: relative;
         }
 
+        /* Canvas Style - แก้บัคภาพสั่น */
         canvas {
-            /* ไม่ต้องใส่เงาที่ canvas โดยตรง เพราะ Flipbook จะจัดการให้ */
+            display: block; 
+            margin: 0 auto;
+            /* ช่วยให้ภาพคมชัดขึ้นเมื่อถูก resize */
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
         }
+
+        /* ปรับแต่ง Shadow ของ Library */
+        .stf__block {
+            /* ลดเงาลงเพื่อให้ลื่นขึ้น */
+            filter: drop-shadow(0 0 10px rgba(0,0,0,0.3));
+        }
+
+        #ttsStatus { font-size: 0.85em; color: #aaa; margin-left: 5px; }
+        
+        /* Loading Overlay */
+        #loading {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); color: white;
+            display: none; justify-content: center; align-items: center; flex-direction: column;
+            z-index: 999;
+        }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
-    <div class="controls">
-        <label for="upload">เลือกไฟล์ PDF (แบบหน้าคู่): </label>
-        <input type="file" id="upload" accept="application/pdf" />
-        
-        <div style="margin-left: 20px; font-size: 0.9em;">
-            <input type="checkbox" id="splitPages" checked>
-            <label for="splitPages">ตัดแบ่งครึ่งหน้า (สำหรับไฟล์หน้าคู่)</label>
-        </div>
+    <div id="loading">
+        <div class="spinner"></div>
+        <div id="loadingText">กำลังประมวลผล PDF...</div>
     </div>
 
-    <div id="book" class="book-container"></div>
+    <div class="controls">
+        <label class="btn-upload">
+            <i class="fas fa-file-pdf"></i> เลือก PDF
+            <input type="file" id="upload" accept="application/pdf" style="display:none;" />
+        </label>
+        
+        <div style="display:flex; align-items:center; gap:5px;">
+            <input type="checkbox" id="splitPages" checked>
+            <label for="splitPages">ตัดหน้าคู่</label>
+        </div>
+
+        <div class="divider"></div>
+
+        <select id="voiceSelect"><option value="">กำลังโหลดเสียง...</option></select>
+        
+        <button id="btnRead" disabled><i class="fas fa-volume-up"></i> อ่าน</button>
+        <button id="btnStop" class="btn-stop" style="display:none;"><i class="fas fa-stop"></i> หยุด</button>
+        
+        <span id="ttsStatus"></span>
+    </div>
+
+    <div class="book-wrapper">
+        <div id="book"></div>
+    </div>
 
     <script>
+        // Setup PDF.js Worker
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
+        // DOM Elements
         const uploadInput = document.getElementById('upload');
         const splitCheckbox = document.getElementById('splitPages');
         const bookElement = document.getElementById('book');
+        const voiceSelect = document.getElementById('voiceSelect');
+        const btnRead = document.getElementById('btnRead');
+        const btnStop = document.getElementById('btnStop');
+        const ttsStatus = document.getElementById('ttsStatus');
+        const loadingScreen = document.getElementById('loading');
+        const loadingText = document.getElementById('loadingText');
+
+        // Variables
         let pageFlip;
+        let pageTexts = []; // เก็บข้อความแต่ละหน้า
+        let synth = window.speechSynthesis;
+        let voices = [];
 
-        uploadInput.addEventListener('change', async function(e) {
-            const file = e.target.files[0];
-            if (!file) return;
+        // --- 1. ระบบเสียง (TTS) ---
 
-            if (file.type !== 'application/pdf') {
-                alert('กรุณาอัพโหลดไฟล์ PDF เท่านั้น');
+        function loadVoices() {
+            voices = synth.getVoices();
+            voiceSelect.innerHTML = '';
+            
+            // เรียงลำดับ: เอาเสียง Google/Microsoft (AI) ขึ้นก่อน
+            voices.sort((a, b) => {
+                const isThaiA = a.lang.includes('th');
+                const isThaiB = b.lang.includes('th');
+                if (isThaiA && !isThaiB) return -1;
+                if (!isThaiA && isThaiB) return 1;
+                return 0;
+            });
+
+            voices.forEach(voice => {
+                const option = document.createElement('option');
+                option.textContent = `${voice.name} (${voice.lang})`;
+                option.value = voice.name;
+                if(voice.lang.includes('th-TH') || voice.lang.includes('th_TH')) option.selected = true;
+                voiceSelect.appendChild(option);
+            });
+        }
+
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+            speechSynthesis.onvoiceschanged = loadVoices;
+        }
+        loadVoices();
+
+        function speak(text) {
+            if (synth.speaking) synth.cancel();
+            if (!text || text.trim() === "") {
+                ttsStatus.textContent = "(ไม่มีข้อความ)";
+                setTimeout(() => ttsStatus.textContent = "", 2000);
                 return;
             }
 
-            const fileReader = new FileReader();
-            fileReader.onload = async function() {
-                const typedarray = new Uint8Array(this.result);
-                await renderPDF(typedarray);
+            const utterance = new SpeechSynthesisUtterance(text);
+            const selectedVoice = voices.find(v => v.name === voiceSelect.value);
+            if (selectedVoice) utterance.voice = selectedVoice;
+            
+            // ปรับความเร็วเสียงให้เป็นธรรมชาติ
+            utterance.rate = 1.0; 
+            utterance.pitch = 1.0;
+
+            utterance.onstart = () => {
+                btnRead.style.display = 'none';
+                btnStop.style.display = 'flex';
+                ttsStatus.textContent = "กำลังอ่าน...";
             };
-            fileReader.readAsArrayBuffer(file);
+            utterance.onend = () => {
+                btnRead.style.display = 'flex';
+                btnStop.style.display = 'none';
+                ttsStatus.textContent = "";
+            };
+            utterance.onerror = () => {
+                btnRead.style.display = 'flex';
+                btnStop.style.display = 'none';
+            };
+
+            synth.speak(utterance);
+        }
+
+        btnRead.addEventListener('click', () => {
+            if (!pageFlip) return;
+            
+            // Logic อ่านข้อความ: อ่านหน้าซ้าย + ขวา ถ้าเปิดแบบหน้าคู่
+            const index = pageFlip.getCurrentPageIndex();
+            const orient = pageFlip.getOrientation(); // portrait / landscape
+            
+            let textToRead = pageTexts[index] || "";
+
+            // ถ้าเป็นแนวนอน (Landscape) และมีหน้าถัดไป ให้เอาข้อความมาต่อกัน
+            if (orient === 'landscape' && (index + 1) < pageTexts.length) {
+                // เช็คว่าไม่ใช่หน้าสุดท้าย หรือหน้าปกเดี่ยวๆ
+                textToRead += " " + (pageTexts[index + 1] || "");
+            }
+
+            speak(textToRead);
+        });
+
+        btnStop.addEventListener('click', () => {
+            synth.cancel();
+            btnRead.style.display = 'flex';
+            btnStop.style.display = 'none';
+            ttsStatus.textContent = "";
+        });
+
+        // --- 2. ระบบ PDF & Render ---
+
+        uploadInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file || file.type !== 'application/pdf') {
+                alert('กรุณาเลือกไฟล์ PDF');
+                return;
+            }
+
+            loadingScreen.style.display = 'flex';
+            btnRead.disabled = true;
+
+            const reader = new FileReader();
+            reader.onload = async function() {
+                try {
+                    const typedarray = new Uint8Array(this.result);
+                    await renderPDF(typedarray);
+                    btnRead.disabled = false;
+                } catch (err) {
+                    console.error(err);
+                    alert("เกิดข้อผิดพลาดในการอ่านไฟล์");
+                } finally {
+                    loadingScreen.style.display = 'none';
+                }
+            };
+            reader.readAsArrayBuffer(file);
         });
 
         async function renderPDF(data) {
+            // Reset
             bookElement.innerHTML = '';
-            if (pageFlip) pageFlip.destroy();
+            pageTexts = [];
+            if (pageFlip) { pageFlip.destroy(); pageFlip = null; }
+            if (synth.speaking) synth.cancel();
 
-            const loadingTask = pdfjsLib.getDocument(data);
-            const pdf = await loadingTask.promise;
-            
+            const pdf = await pdfjsLib.getDocument(data).promise;
             const shouldSplit = splitCheckbox.checked;
-            const scale = 1.5; 
+            const scale = 1.5; // Scale คุณภาพ
 
-            // ตัวแปรสำหรับเก็บ "ปกหลัง" เอาไว้แปะตอนท้ายสุด
+            // ตัวแปรพักข้อมูล
             let backCoverCanvas = null;
+            let backCoverText = "";
 
+            // คำนวณขนาดจากหน้าแรก
             const firstPage = await pdf.getPage(1);
-            let viewport = firstPage.getViewport({ scale: scale });
-            let finalWidth = shouldSplit ? viewport.width / 2 : viewport.width;
-            let finalHeight = viewport.height;
+            const vp = firstPage.getViewport({ scale: scale });
+            const finalW = shouldSplit ? vp.width / 2 : vp.width;
+            const finalH = vp.height;
 
-            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-                const page = await pdf.getPage(pageNum);
-                viewport = page.getViewport({ scale: scale });
+            // Loop ทุกหน้า
+            for (let i = 1; i <= pdf.numPages; i++) {
+                loadingText.textContent = `กำลังแปลงหน้า ${i} / ${pdf.numPages}...`;
+                
+                const page = await pdf.getPage(i);
+                const viewport = page.getViewport({ scale: scale });
+                
+                // ดึง Text
+                const textContent = await page.getTextContent();
+                let textL = "", textR = "";
+                const midX = viewport.width / 2;
+
+                // แยก Text ซ้าย/ขวา ตามพิกัด X
+                textContent.items.forEach(item => {
+                    const x = item.transform[4]; 
+                    const str = item.str + " ";
+                    if (shouldSplit) {
+                        (x < midX) ? textL += str : textR += str;
+                    } else {
+                        textL += str;
+                    }
+                });
 
                 if (shouldSplit) {
-                    // === โหมดตัดครึ่งหน้า ===
-                    
-                    if (pageNum === 1) {
-                        // *** กรณีหน้าแรก (ปกคู่) ***
-                        // ซ้าย = ปกหลัง (เก็บไว้ก่อน)
-                        // ขวา = ปกหน้า (แสดงเลย เป็นหน้าแรก)
-
-                        // 1. จัดการปกหลัง (ซ้าย) - ยังไม่ append ลง HTML
+                    // === โหมดตัดหน้าคู่ ===
+                    if (i === 1) {
+                        // หน้า 1 (ปก): 
+                        // ซ้าย (ปกหลัง) -> เก็บไว้แปะท้ายสุด
                         backCoverCanvas = document.createElement('canvas');
-                        const ctxBack = backCoverCanvas.getContext('2d');
-                        backCoverCanvas.width = viewport.width / 2;
-                        backCoverCanvas.height = viewport.height;
-                        
-                        await page.render({
-                            canvasContext: ctxBack,
-                            viewport: viewport
-                        }).promise;
+                        backCoverCanvas.width = finalW; backCoverCanvas.height = finalH;
+                        await page.render({ canvasContext: backCoverCanvas.getContext('2d'), viewport }).promise;
+                        backCoverText = textL;
 
-                        // 2. จัดการปกหน้า (ขวา) - append เลย
-                        const canvasFront = document.createElement('canvas');
-                        const ctxFront = canvasFront.getContext('2d');
-                        canvasFront.width = viewport.width / 2;
-                        canvasFront.height = viewport.height;
+                        // ขวา (ปกหน้า) -> แปะเลยเป็นหน้าแรก
+                        const cFront = createPageCanvas(finalW, finalH);
+                        const ctx = cFront.getContext('2d');
+                        ctx.translate(-finalW, 0); // เลื่อน Viewport เพื่อเอาด้านขวา
+                        await page.render({ canvasContext: ctx, viewport }).promise;
                         
-                        // เลื่อนตำแหน่งเพื่อเอาภาพด้านขวา
-                        ctxFront.translate(-(viewport.width / 2), 0); 
-
-                        await page.render({
-                            canvasContext: ctxFront,
-                            viewport: viewport
-                        }).promise;
-                        
-                        // ใส่ปกหน้าเข้าเป็นหน้าแรก
-                        bookElement.appendChild(canvasFront);
+                        bookElement.appendChild(cFront);
+                        pageTexts.push(textR);
 
                     } else {
-                        // *** กรณีหน้าเนื้อหาทั่วไป (2, 3, 4...) ***
-                        // ตัดซ้าย ใส่ก่อน, ตัดขวา ใส่ตาม
-                        
-                        // หน้าซ้าย
-                        const canvasL = document.createElement('canvas');
-                        const ctxL = canvasL.getContext('2d');
-                        canvasL.width = viewport.width / 2;
-                        canvasL.height = viewport.height;
-                        await page.render({ canvasContext: ctxL, viewport: viewport }).promise;
-                        bookElement.appendChild(canvasL);
+                        // หน้าเนื้อหา: สร้าง 2 canvas (ซ้าย, ขวา)
+                        // 1. ซ้าย
+                        const cL = createPageCanvas(finalW, finalH);
+                        await page.render({ canvasContext: cL.getContext('2d'), viewport }).promise;
+                        bookElement.appendChild(cL);
+                        pageTexts.push(textL);
 
-                        // หน้าขวา
-                        const canvasR = document.createElement('canvas');
-                        const ctxR = canvasR.getContext('2d');
-                        canvasR.width = viewport.width / 2;
-                        canvasR.height = viewport.height;
-                        ctxR.translate(-(viewport.width / 2), 0);
-                        await page.render({ canvasContext: ctxR, viewport: viewport }).promise;
-                        bookElement.appendChild(canvasR);
+                        // 2. ขวา
+                        const cR = createPageCanvas(finalW, finalH);
+                        const ctxR = cR.getContext('2d');
+                        ctxR.translate(-finalW, 0);
+                        await page.render({ canvasContext: ctxR, viewport }).promise;
+                        bookElement.appendChild(cR);
+                        pageTexts.push(textR);
                     }
-
                 } else {
-                    // === โหมดปกติ (ไม่ตัด) ===
-                    const canvas = document.createElement('canvas');
-                    const context = canvas.getContext('2d');
-                    canvas.width = viewport.width;
-                    canvas.height = viewport.height;
-                    await page.render({ canvasContext: context, viewport: viewport }).promise;
+                    // === โหมดปกติ ===
+                    const canvas = createPageCanvas(finalW, finalH);
+                    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
                     bookElement.appendChild(canvas);
+                    pageTexts.push(textL);
                 }
             }
 
-            // *** ขั้นตอนสุดท้าย ***
-            // ถ้ามีปกหลังที่เก็บไว้ (backCoverCanvas) ให้เอามาต่อท้ายสุด
+            // แปะปกหลัง (ถ้ามีและอยู่ในโหมดตัด)
             if (shouldSplit && backCoverCanvas) {
-                bookElement.appendChild(backCoverCanvas);
+                // ต้องวาดใหม่ลง Canvas ที่ Clean (เพราะ backCoverCanvas ที่ create ไว้ context อาจจะ shift)
+                // แต่วิธีง่ายสุดคือใช้ backCoverCanvas ที่ render เสร็จแล้ว แต่เราต้อง Crop เอาเฉพาะซ้าย
+                // วิธีแก้: วาด backCoverCanvas (เต็มใบ) ลง canvas ใหม่ขนาดครึ่งเดียว
+                const finalBack = createPageCanvas(finalW, finalH);
+                finalBack.getContext('2d').drawImage(backCoverCanvas, 0, 0); // วาดเริ่มที่ 0,0 มันจะเห็นแค่ครึ่งซ้ายพอดี
+                
+                bookElement.appendChild(finalBack);
+                pageTexts.push(backCoverText);
             }
 
-            initFlipBook(finalWidth, finalHeight);
+            // *** FIX JITTER: แก้บัคกระตุกด้วยการเช็คเลขคู่ ***
+            // PageFlip ต้องการจำนวนหน้าเป็นเลขคู่ (Even) เพื่อให้ปกหลังปิดสนิท
+            if (bookElement.children.length % 2 !== 0) {
+                const blankPage = createPageCanvas(finalW, finalH);
+                const ctx = blankPage.getContext('2d');
+                ctx.fillStyle = "white"; 
+                ctx.fillRect(0,0, finalW, finalH);
+                
+                // แทรกหน้าว่างก่อนหน้าสุดท้าย (เพื่อให้ปกหลังยังเป็นหน้าสุดท้ายจริงๆ)
+                // หรือต่อท้ายสุดเลยก็ได้ ในที่นี้ต่อท้ายสุดเพื่อความชัวร์
+                bookElement.appendChild(blankPage);
+                pageTexts.push(""); 
+            }
+
+            initFlipBook(finalW, finalH);
+        }
+
+        // Helper สร้าง Canvas เปล่า
+        function createPageCanvas(w, h) {
+            const c = document.createElement('canvas');
+            c.width = w;
+            c.height = h;
+            return c;
         }
 
         function initFlipBook(w, h) {
             pageFlip = new St.PageFlip(bookElement, {
-                width: w, 
+                width: w,
                 height: h,
                 size: 'stretch',
-                // ปรับ min/max ให้ยืดหยุ่นขึ้น
-                minWidth: 200,
-                maxWidth: 800,
-                minHeight: 300,
-                maxHeight: 1000,
+                // Config ความลื่นไหล
+                minWidth: 300, maxWidth: 1000,
+                minHeight: 400, maxHeight: 1200,
                 showCover: true,
-                maxShadowOpacity: 0.5,
-                autoSize: true
+                maxShadowOpacity: 0.2, // ลดเงาให้ไม่หนักเครื่อง
+                autoSize: true,
+                mobileScrollSupport: false // ป้องกันปัดแล้วจอเลื่อนบนมือถือ
             });
 
             pageFlip.loadFromHTML(document.querySelectorAll("canvas"));
+
+            // Event: หยุดเสียงเมื่อพลิกหน้า
+            pageFlip.on('flip', (e) => {
+                if (synth.speaking) {
+                    synth.cancel();
+                    btnRead.style.display = 'flex';
+                    btnStop.style.display = 'none';
+                    ttsStatus.textContent = "";
+                }
+            });
         }
     </script>
 </body>
